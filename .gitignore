@@ -1,0 +1,5 @@
+ai-env/
+chat_history/
+__pycache__/
+.env
+.DS_Store
