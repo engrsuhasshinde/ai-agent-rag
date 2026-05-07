@@ -74,6 +74,37 @@ def split_into_chunks(text, max_words = CHUNK_SIZE):
 
     return chunks
 
+# =============================================
+# EMBEDDINGS
+# =============================================
+
+def get_embedding(text):
+    response = client.embeddings.create(
+        model = EMBEDDING_MODEL,
+        input = text
+    )
+
+    return response.data[0].embedding
+
+# =============================================
+# STORE MESSAGE IN CHROMADB
+# =============================================
+
+def save_message(message_id, role, text):
+    chunks = split_into_chunks(text)
+
+    for index, chunk in enumerate(chunks):
+        chunk_id = f"{message_id}_chunk_{index}"
+
+        collection.upsert(
+            ids = [chunk_id],  # unique, stable ID for chunk
+            embeddings = [get_embedding(chunk)],  # embedding vector for chunk
+            documents = [chunk],  # the actual text content of the chunk
+            metadatas = [{
+                "role": role  # metadata to indicate if it's from user or assistant
+            }]
+        )
+
 conversation = []
 
 print("Suhas's Coding Assistant (🤖): Hello! (type 'exit' to quit)")
