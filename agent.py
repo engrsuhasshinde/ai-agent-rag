@@ -60,7 +60,7 @@ def split_into_chunks(text, max_words = CHUNK_SIZE):
         word_count = len(sentence.split())
 
         if (
-            current_word_count + word_count > max_words and current_chunk
+            current_word_count + word_count > max_words and current_chunk  # Avoid creating empty chunks
         ):
             chunks.append(" ".join(current_chunk))
             current_chunk = []
@@ -105,7 +105,56 @@ def save_message(message_id, role, text):
             }]
         )
 
+# =============================================
+# SEMANTIC SEARCH
+# =============================================
+
+def find_relevant_context(query, top_k = TOP_K):
+    if collection.count() == 0:
+        return ""  # No data in collection, return empty context
+
+    results = collection.query(
+        query_embeddings = [get_embedding(query)],
+        n_results = min(top_k, collection.count()),
+        include = ["documents", "distances"]
+    )
+
+    relevant_chunks = []
+    documents = results["documents"][0]  # List of retrieved document chunks
+    distances = results["distances"][0]  # Corresponding similarity scores
+
+    for document, distance in zip(documents, distances):
+        similarity = 1 - distance  # Convert distance to similarity score
+
+        if similarity >= SIMILARITY_THRESHOLD:  # Ignore weak/irrelevant matches
+            relevant_chunks.append(document)
+
+    return "\n".join(relevant_chunks)
+
+# =============================================
+# BUILD PROMPT WITH CONTEXT
+# =============================================
+# Inject relevant context into the system prompt so LLM can use it to generate informed responses
+
+def build_system_prompt(context):
+    if not context:
+        return SYSTEM_PROMPT  # No context, return base system prompt
+
+    return f"""{SYSTEM_PROMPT}
+
+Relevant context from past conversation:
+
+{context}
+
+Use the context above only if it helps answer the question.
+"""
+
+# =============================================
+# MAIN CONVERSATION LOOP
+# =============================================
+
 conversation = []
+message_counter = 0
 
 print("Suhas's Coding Assistant (🤖): Hello! (type 'exit' to quit)")
 print("=" * 50)
@@ -113,11 +162,24 @@ print("=" * 50)
 while True:
     user_input = input("You: ").strip()
 
+    if not user_input:
+        continue  # Skip empty inputs
+
     if user_input.lower() == "exit":
         print("Suhas's Coding Assistant (🤖): Goodbye!")
         break
 
-    conversation.append({ "role": "user", "content": user_input })
+    # Retrieve semantic context from ChromaDB based on user input
+    context = find_relevant_context(user_input)
+
+    # Build final system prompt with relevant context
+    system_prompt = build_system_prompt(context)
+
+    # Add user message to conversation and call LLM
+    conversation.append({
+        "role": "user",
+        "content": user_input
+    })
 
     try:
         response = client.chat.completions.create(
@@ -125,7 +187,7 @@ while True:
             messages = [
                 {
                     "role": "system",
-                    "content": SYSTEM_PROMPT
+                    "content": system_prompt
                 }
             ] + conversation,
             stream = True  # Enables streaming responses
@@ -135,6 +197,7 @@ while True:
 
         # Stream output response
         full_response = ""
+
         for chunk in response:
             content = chunk.choices[0].delta.content or ""
             print(content, end = "", flush = True)
@@ -142,7 +205,26 @@ while True:
 
         print("\n")  # Print a newline after the full response is received
 
-        conversation.append({ "role": "assistant", "content": full_response })  # Add the assistant's response to the conversation history
+        # Save assistant response in conversation
+        conversation.append({
+            "role": "assistant",
+            "content": full_response
+        })
+
+        # Store embeddings for both user message and assistant response in vector database
+        save_message(
+            f"message_{message_counter}",
+            "user",
+            user_input
+        )
+
+        save_message(
+            f"message_{message_counter}",
+            "assistant",
+            full_response
+        )
+
+        message_counter += 1
     except Exception as e:
         print(f"Error: {e}")
         conversation.pop()  # Remove the last unanswered user message from history if there's an error
