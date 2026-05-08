@@ -1,5 +1,6 @@
 ai-env/
 chat_history/
+chroma_db/
 __pycache__/
 .env
 .DS_Store
